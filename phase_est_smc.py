@@ -67,7 +67,7 @@ class phase_est_smc:
             
             # if counter % 20 == 0:
             #     print("current iteration {:d}, n_eff = {:f} vs threshold {:f}".format(counter, n_eff, threshold))
-
+        
         return self.particle_pos, self.particle_wgts
 
     def update_t(self, factor=9/8):
@@ -98,6 +98,19 @@ class phase_est_smc:
         particle_pos = (edges[1:] + edges[:-1]) / 2 # mid point of each bin is the position
         self.particle_pos = particle_pos * std + mean # undo normalization
         self.particle_wgts = bins
+
+    def liu_west_resample(self, a=0.98):
+        
+        mu = np.average(self.particle_pos, weights=self.particle_wgts)
+        e_x2 = np.average(self.particle_pos**2, weights=self.particle_wgts)
+        var = np.sqrt(1-a**2) * ( e_x2 - mu**2 ) # var = E(X^2) - E(X)^2
+        new_particle_pos = np.random.choice(self.particle_pos, size=self.num_particles, p=self.particle_wgts)
+        for i in range(len(new_particle_pos)):
+            mu_i = a * new_particle_pos[i] + (1-a) * mu
+            new_particle_pos[i] = np.random.normal(loc=mu_i, scale=np.sqrt(var))  ## scale is standard deviation
+
+        self.particle_pos = np.copy(new_particle_pos)
+        self.particle_wgts = np.ones(self.num_particles) * 1/self.num_particles ## set all weights to 1/N again
  
 def prob_zero(omega, phi, t):
     return (np.cos((omega-phi)*t/2)) **2
