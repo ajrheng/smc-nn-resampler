@@ -5,6 +5,7 @@ class phase_est_smc:
     def __init__(self, omega_star, t0):
         self.omega_star = omega_star
         self.t = t0
+        self.lw_break_flag = False
 
     def init_particles(self, num_particles):
         """
@@ -63,11 +64,11 @@ class phase_est_smc:
             n_eff = 1/(np.sum(self.particle_wgts**2))
 
             counter += 1
-            self.update_t()
+            self.update_t(factor=51/50)
             
             # if counter % 20 == 0:
             #     print("current iteration {:d}, n_eff = {:f} vs threshold {:f}".format(counter, n_eff, threshold))
-        
+
         return self.particle_pos, self.particle_wgts
 
     def update_t(self, factor=9/8):
@@ -104,6 +105,11 @@ class phase_est_smc:
         mu = np.average(self.particle_pos, weights=self.particle_wgts)
         e_x2 = np.average(self.particle_pos**2, weights=self.particle_wgts)
         var = np.sqrt(1-a**2) * ( e_x2 - mu**2 ) # var = E(X^2) - E(X)^2
+
+        if var < 0:
+            self.lw_break_flag = True
+            return
+
         new_particle_pos = np.random.choice(self.particle_pos, size=self.num_particles, p=self.particle_wgts)
         for i in range(len(new_particle_pos)):
             mu_i = a * new_particle_pos[i] + (1-a) * mu
