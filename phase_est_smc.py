@@ -65,9 +65,9 @@ class phase_est_smc:
 
             counter += 1
             self.update_t(factor=51/50)
-            
+
             # if counter % 20 == 0:
-            #     print("current iteration {:d}, n_eff = {:f} vs threshold {:f}".format(counter, n_eff, threshold))
+            #     print("current iteration {:d}, n_eff = {:f} vs threshold {:f} and t is {:f}".format(counter, n_eff, threshold, self.t))
 
         return self.particle_pos, self.particle_wgts
 
