@@ -1,11 +1,17 @@
 import numpy as np
+from smc_memory import smc_memory
 
 class phase_est_smc:
 
-    def __init__(self, omega_star, t0):
+    def __init__(self, omega_star, t0, max_iters):
         self.omega_star = omega_star
         self.t = t0
-        self.lw_break_flag = False
+        self.break_flag = False
+        self.counter = 0
+        self.data = []
+        self.max_iters = max_iters
+        self.curr_omega_est = 0 # best current estimate of omega
+        self.memory = smc_memory() # memory to track statistics of each run
 
     def init_particles(self, num_particles):
         """
@@ -15,7 +21,7 @@ class phase_est_smc:
             num_particles: number of particles in the SMC algorithm
         """
         self.num_particles = num_particles
-        self.particle_pos = np.linspace(0, 2*np.pi, self.num_particles)
+        self.particle_pos = np.linspace(-np.pi, np.pi, self.num_particles)
         self.particle_wgts = np.ones(num_particles) * 1/num_particles # uniform weight initialization
 
     def particles(self, num_measurements=1, threshold=None):
@@ -29,17 +35,18 @@ class phase_est_smc:
         Returns:
             array of particle positions and their corresponding weights
         """
-
+        
         if threshold is None:
             threshold = self.num_particles/10
 
         n_eff = None # init None so it will be calculated on first iteration of while loop
 
-        counter = 0 
         while n_eff is None or n_eff >= threshold:
-            
-            # get measurement
-            phi_k = np.random.uniform() * 2 * np.pi
+
+            # phi_k = np.random.uniform() * 2 * np.pi
+            phi_k = np.random.uniform(low=-1, high=1) * np.pi
+            # phi_k = 0
+
             measure_list = []
             for _ in range(num_measurements):
                 r = np.random.uniform()
@@ -58,18 +65,54 @@ class phase_est_smc:
             # bayes update of weights
             self.particle_wgts = np.multiply(self.particle_wgts, particle_prob) # numerator
             norm = np.sum(self.particle_wgts) # denominator
-            self.particle_wgts /= norm 
+            self.particle_wgts /= norm
             
             # recalculate n_eff
             n_eff = 1/(np.sum(self.particle_wgts**2))
 
-            counter += 1
-            self.update_t(factor=51/50)
+            self.counter += 1
 
-            # if counter % 20 == 0:
-            #     print("current iteration {:d}, n_eff = {:f} vs threshold {:f} and t is {:f}".format(counter, n_eff, threshold, self.t))
+            self.data.append(self.particle_pos[np.argmax(self.particle_wgts)])
+ 
+            if self.counter == self.max_iters:
+                self.curr_omega_est = self.particle_pos[np.argmax(self.particle_wgts)]
+                self.break_flag=True
+                break
+
+            self.update_t(factor=8/7)
+
+        # update memory with statistics before resampling
+        self.memory.upd_pos_wgt_bef_res(self.particle_pos, self.particle_wgts)
 
         return self.particle_pos, self.particle_wgts
+
+    def get_bins(self, num_bins, num_samples=10000):
+        """
+        Draw samples from current posterior for binning so that we can
+        pass into NN for resampling
+        """
+        data = np.random.choice(self.particle_pos, size = num_samples, p=self.particle_wgts)
+        mean = np.mean(data)
+        std = np.std(data)
+        
+        # if std deviation of posterior is 0, it means the distribution is sharply peaked
+        # and will not change anymore. we can exit the algorithm
+        if std == 0 or self.break_flag:
+            self.curr_omega_est = self.particle_pos[np.argmax(self.particle_wgts)]
+            self.break_flag=True
+            return None, None, None, None
+        
+        data = (data-mean)/std
+        bins, edges = np.histogram(data, num_bins)
+        edges = (edges[1:] + edges[:-1]) / 2 # take midpoint of bin edges
+        bins = bins/num_samples
+
+        # update memory
+        self.memory.upd_bins_edges_bef_res(bins, edges)
+        self.memory.upd_mean_std_bef_res(mean, std)
+
+        return bins, edges, mean, std
+
 
     def update_t(self, factor=9/8):
         """
@@ -90,15 +133,40 @@ class phase_est_smc:
 
         Args:
             bins:  [1 x n] np array of bins
-            edges: [n+1] np array of bin edges
+            edges: [n, ] np array of bin edges
             mean: mean of data before resampling
             std: std of data before resampling
         """
         
+
         bins = bins[0]
-        particle_pos = (edges[1:] + edges[:-1]) / 2 # mid point of each bin is the position
-        self.particle_pos = particle_pos * std + mean # undo normalization
-        self.particle_wgts = bins
+        self.memory.upd_bins_edges_aft_res(bins, edges)
+
+        particle_pos = edges * std + mean # undo normalization
+        
+        ## if num_particles == number of bins
+        # self.particle_pos = particle_pos * std + mean
+        # self.particle_wgts = bins
+        
+        ## method 1: duplicate particle positions and weights
+        # repeat_factor = self.num_particles/len(bins)
+        # self.particle_pos = np.repeat(particle_pos, repeat_factor)
+        # if len(self.particle_pos) != self.num_particles:
+        #     print("Number of particles not multiple of number of bins!")
+        #     return
+        # self.particle_wgts = np.repeat(bins, repeat_factor)
+        # self.particle_wgts = self.particle_wgts/np.sum(self.particle_wgts)
+
+        ## method 2: sample from binned distribution
+        ## https://stackoverflow.com/a/8251668/9246732
+        self.particle_pos = np.random.choice(particle_pos, size=self.num_particles, p=bins)
+        xsorted = np.argsort(particle_pos)
+        ypos = np.searchsorted(particle_pos[xsorted], self.particle_pos)
+        indices = xsorted[ypos]
+        self.particle_wgts = bins[indices]
+        self.particle_wgts = self.particle_wgts/np.sum(self.particle_wgts)
+
+        self.memory.upd_pos_wgt_aft_res(self.particle_pos, self.particle_wgts)
 
     def liu_west_resample(self, a=0.98):
         
@@ -107,7 +175,7 @@ class phase_est_smc:
         var = np.sqrt(1-a**2) * ( e_x2 - mu**2 ) # var = E(X^2) - E(X)^2
 
         if var < 0:
-            self.lw_break_flag = True
+            self.break_flag = True
             return
 
         new_particle_pos = np.random.choice(self.particle_pos, size=self.num_particles, p=self.particle_wgts)
