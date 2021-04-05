@@ -92,26 +92,22 @@ class phase_est_smc:
         pass into NN for resampling
         """
         data = np.random.choice(self.particle_pos, size = num_samples, p=self.particle_wgts)
-        mean = np.mean(data)
-        std = np.std(data)
-        
+
         # if std deviation of posterior is 0, it means the distribution is sharply peaked
         # and will not change anymore. we can exit the algorithm
-        if std == 0 or self.break_flag:
+        if np.std(data) == 0 or self.break_flag:
             self.curr_omega_est = self.particle_pos[np.argmax(self.particle_wgts)]
             self.break_flag=True
-            return None, None, None, None
+            return None, None
         
-        data = (data-mean)/std
         bins, edges = np.histogram(data, num_bins)
         edges = (edges[1:] + edges[:-1]) / 2 # take midpoint of bin edges
         bins = bins/num_samples
 
         # update memory
         self.memory.upd_bins_edges_bef_res(bins, edges)
-        self.memory.upd_mean_std_bef_res(mean, std)
 
-        return bins, edges, mean, std
+        return bins, edges
 
 
     def update_t(self, factor=9/8):
@@ -127,25 +123,21 @@ class phase_est_smc:
         self.particle_pos = np.random.choice(self.particle_pos, size = self.num_particles, p=self.particle_wgts)
         self.particle_wgts = np.ones(self.num_particles) * 1/self.num_particles
         
-    def nn_resample(self, bins, edges, mean, std):
+    def nn_bins_to_particles(self, bins, edges):
         """
         Convert NN bins to particles.
 
         Args:
             bins:  [1 x n] np array of bins
             edges: [n, ] np array of bin edges
-            mean: mean of data before resampling
-            std: std of data before resampling
         """
         
 
         bins = bins[0]
         self.memory.upd_bins_edges_aft_res(bins, edges)
-
-        particle_pos = edges * std + mean # undo normalization
+        particle_pos = edges
         
-        ## if num_particles == number of bins
-        # self.particle_pos = particle_pos * std + mean
+        # if num_particles == number of bins
         # self.particle_wgts = bins
         
         ## method 1: duplicate particle positions and weights
