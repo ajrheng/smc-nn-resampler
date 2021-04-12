@@ -44,8 +44,8 @@ class phase_est_smc:
         while n_eff is None or n_eff >= threshold:
 
             # phi_k = np.random.uniform() * 2 * np.pi
-            phi_k = np.random.uniform(low=-1, high=1) * np.pi
-            # phi_k = 0
+            # phi_k = np.random.uniform(low=-1, high=1) * np.pi
+            phi_k = 0
 
             measure_list = []
             for _ in range(num_measurements):
@@ -164,7 +164,7 @@ class phase_est_smc:
         
         mu = np.average(self.particle_pos, weights=self.particle_wgts)
         e_x2 = np.average(self.particle_pos**2, weights=self.particle_wgts)
-        var = np.sqrt(1-a**2) * ( e_x2 - mu**2 ) # var = E(X^2) - E(X)^2
+        var = (1-a**2) * ( e_x2 - mu**2 ) # var = E(X^2) - E(X)^2
 
         if var < 0:
             self.break_flag = True
@@ -177,9 +177,11 @@ class phase_est_smc:
 
         self.particle_pos = np.copy(new_particle_pos)
         self.particle_wgts = np.ones(self.num_particles) * 1/self.num_particles ## set all weights to 1/N again
+
+        self.memory.upd_pos_wgt_aft_res(self.particle_pos, self.particle_wgts)
  
 def prob_zero(omega, phi, t):
-    return (np.cos((omega-phi)*t/2)) **2
+    return np.cos((omega+phi)*t/2) **2
 
 def prob_one(omega, phi, t):
-    return (np.sin((omega-phi)*t/2)) **2
+    return np.sin((omega+phi)*t/2) **2
