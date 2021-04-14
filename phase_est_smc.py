@@ -123,7 +123,7 @@ class phase_est_smc:
         self.particle_pos = np.random.choice(self.particle_pos, size = self.num_particles, p=self.particle_wgts)
         self.particle_wgts = np.ones(self.num_particles) * 1/self.num_particles
         
-    def nn_bins_to_particles(self, bins, edges):
+    def nn_bins_to_particles(self, bins, edges, method=3):
         """
         Convert NN bins to particles.
 
@@ -137,27 +137,64 @@ class phase_est_smc:
         self.memory.upd_bins_edges_aft_res(bins, edges)
         particle_pos = edges
         
-        # if num_particles == number of bins
-        # self.particle_wgts = bins
-        
-        ## method 1: duplicate particle positions and weights
-        # repeat_factor = self.num_particles/len(bins)
-        # self.particle_pos = np.repeat(particle_pos, repeat_factor)
-        # if len(self.particle_pos) != self.num_particles:
-        #     print("Number of particles not multiple of number of bins!")
-        #     return
-        # self.particle_wgts = np.repeat(bins, repeat_factor)
-        # self.particle_wgts = self.particle_wgts/np.sum(self.particle_wgts)
+        if method==1:
+            # method 1: duplicate particle positions and weights
+            repeat_factor = self.num_particles/len(bins)
+            self.particle_pos = np.repeat(particle_pos, repeat_factor)
+            if len(self.particle_pos) != self.num_particles:
+                print("Number of particles not multiple of number of bins!")
+                return
+            self.particle_wgts = np.repeat(bins, repeat_factor)
+            self.particle_wgts = self.particle_wgts/np.sum(self.particle_wgts)
 
-        ## method 2: sample from binned distribution
-        ## https://stackoverflow.com/a/8251668/9246732
-        self.particle_pos = np.random.choice(particle_pos, size=self.num_particles, p=bins)
-        xsorted = np.argsort(particle_pos)
-        ypos = np.searchsorted(particle_pos[xsorted], self.particle_pos)
-        indices = xsorted[ypos]
-        self.particle_wgts = bins[indices]
-        self.particle_wgts = self.particle_wgts/np.sum(self.particle_wgts)
+        if method==2:
+            ## method 2: sample from binned distribution
+            ## but take every particle position to be middle of bin
+            ## https://stackoverflow.com/a/8251668/9246732
+            self.particle_pos = np.random.choice(particle_pos, size=self.num_particles, p=bins)
+            # xsorted = np.argsort(particle_pos)
+            # ypos = np.searchsorted(particle_pos[xsorted], self.particle_pos)
+            # indices = xsorted[ypos]
+            # self.particle_wgts = bins[indices]
+            # self.particle_wgts = self.particle_wgts/np.sum(self.particle_wgts)
+            self.particle_wgts = np.ones(self.num_particles) * 1/self.num_particles
 
+        if method==3:
+            ## every bin defines a gaussian with mean the bin center, and std 1/2 bin width
+            ## we sample as many particles in each bin when converting from bins to particles
+
+            # first convert bins from probabilities to number of particles
+            # then check if there is a discrepancy with total number of particles SMC is supposed to have
+            # if there is then correct for it            
+            bins = bins * self.num_particles
+            bins = np.rint(bins).astype(int)
+            bins_sum = bins.sum()
+
+            if bins_sum != self.num_particles:
+                n = abs(self.num_particles - bins_sum) ## difference in number of particles
+                choices = np.random.choice(np.arange(len(bins)), size=n, p=bins/bins_sum)
+                for i in choices:
+                    if bins_sum < self.num_particles:
+                        bins[i] += 1
+                    else:
+                        bins[i] -= 1
+    
+            particle_pos = []
+            edge_width = edges[1] - edges[0]
+            std = edge_width/2
+            for i in range(len(edges)):
+                n_part_from_bin = bins[i]
+                pos_from_bin = np.random.normal(edges[i], std, size=n_part_from_bin).tolist()
+                particle_pos.extend(pos_from_bin)
+
+        self.particle_pos = np.array(particle_pos).copy()
+
+        if len(self.particle_pos) != self.num_particles:
+            print("Error in conversion from bins to particles. Particle numbers don't match!")
+            print("Resample {:d} particles, but supposed to have {:d} particles".format(len(self.particle_pos), self.num_particles))
+            exit()
+
+        self.particle_wgts = np.ones(self.num_particles) * 1/self.num_particles
         self.memory.upd_pos_wgt_aft_res(self.particle_pos, self.particle_wgts)
 
     def liu_west_resample(self, a=0.98):
