@@ -44,8 +44,8 @@ class phase_est_smc:
         while n_eff is None or n_eff >= threshold:
 
             # phi_k = np.random.uniform() * 2 * np.pi
-            # phi_k = np.random.uniform(low=-1, high=1) * np.pi
-            phi_k = 0
+            phi_k = np.random.uniform(low=-1, high=1) * np.pi
+            # phi_k = 0
 
             measure_list = []
             for _ in range(num_measurements):
@@ -95,10 +95,10 @@ class phase_est_smc:
 
         # if std deviation of posterior is 0, it means the distribution is sharply peaked
         # and will not change anymore. we can exit the algorithm
-        if np.std(data) == 0 or self.break_flag:
-            self.curr_omega_est = self.particle_pos[np.argmax(self.particle_wgts)]
-            self.break_flag=True
-            return None, None
+        # if np.std(data) == 0 or self.break_flag:
+        #     self.curr_omega_est = self.particle_pos[np.argmax(self.particle_wgts)]
+        #     self.break_flag=True
+        #     return None, None
         
         bins, edges = np.histogram(data, num_bins)
         edges = (edges[1:] + edges[:-1]) / 2 # take midpoint of bin edges
@@ -150,13 +150,7 @@ class phase_est_smc:
         if method==2:
             ## method 2: sample from binned distribution
             ## but take every particle position to be middle of bin
-            ## https://stackoverflow.com/a/8251668/9246732
             self.particle_pos = np.random.choice(particle_pos, size=self.num_particles, p=bins)
-            # xsorted = np.argsort(particle_pos)
-            # ypos = np.searchsorted(particle_pos[xsorted], self.particle_pos)
-            # indices = xsorted[ypos]
-            # self.particle_wgts = bins[indices]
-            # self.particle_wgts = self.particle_wgts/np.sum(self.particle_wgts)
             self.particle_wgts = np.ones(self.num_particles) * 1/self.num_particles
 
         if method==3:
@@ -181,7 +175,7 @@ class phase_est_smc:
     
             particle_pos = []
             edge_width = edges[1] - edges[0]
-            std = edge_width/2
+            std = edge_width/4
             for i in range(len(edges)):
                 n_part_from_bin = bins[i]
                 pos_from_bin = np.random.normal(edges[i], std, size=n_part_from_bin).tolist()
@@ -204,6 +198,7 @@ class phase_est_smc:
         var = (1-a**2) * ( e_x2 - mu**2 ) # var = E(X^2) - E(X)^2
 
         if var < 0:
+            self.curr_omega_est = self.particle_pos[np.argmax(self.particle_wgts)]
             self.break_flag = True
             return
 
