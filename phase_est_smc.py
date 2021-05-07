@@ -3,7 +3,7 @@ from smc_memory import smc_memory
 
 class phase_est_smc:
 
-    def __init__(self, omega_star, t0, max_iters):
+    def __init__(self, omega_star, t0, max_iters, heuristic=None):
         self.omega_star = omega_star
         self.t = t0
         self.break_flag = False
@@ -12,6 +12,11 @@ class phase_est_smc:
         self.max_iters = max_iters
         self.curr_omega_est = 0 # best current estimate of omega
         self.memory = smc_memory() # memory to track statistics of each run
+
+        if heuristic is None:
+            self.heuristic = 'exponential'
+        elif heuristic == 'adaptive':
+            self.heuristic = 'adaptive'
 
     def init_particles(self, num_particles):
         """
@@ -75,11 +80,12 @@ class phase_est_smc:
             self.data.append(self.particle_pos[np.argmax(self.particle_wgts)])
  
             if self.counter == self.max_iters:
-                self.curr_omega_est = self.particle_pos[np.argmax(self.particle_wgts)]
+                # self.curr_omega_est = self.particle_pos[np.argmax(self.particle_wgts)]
+                self.curr_omega_est = np.average(self.particle_pos, weights = self.particle_wgts)
                 self.break_flag=True
                 break
 
-            self.update_t(factor=8/7)
+            self.update_t()
 
         # update memory with statistics before resampling
         self.memory.upd_pos_wgt_bef_res(self.particle_pos, self.particle_wgts)
@@ -110,11 +116,16 @@ class phase_est_smc:
         return bins, edges
 
 
-    def update_t(self, factor=9/8):
+    def update_t(self):
         """
-        Updates time by given factor
+        Updates time 
         """
-        self.t = self.t * factor
+
+        if self.heuristic == 'exponential':
+            self.t = self.t * 9/8
+        elif self.heuristic == 'adaptive':
+            two_particles = np.random.choice(self.particle_pos, size=2, replace=False, p=self.particle_wgts)
+            self.t = 1 / np.abs(two_particles[0] - two_particles[1])
 
     def bootstrap_resample(self):
         """
@@ -198,7 +209,8 @@ class phase_est_smc:
         var = (1-a**2) * ( e_x2 - mu**2 ) # var = E(X^2) - E(X)^2
 
         if var < 0:
-            self.curr_omega_est = self.particle_pos[np.argmax(self.particle_wgts)]
+            self.curr_omega_est = np.average(self.particle_pos, weights = self.particle_wgts)
+           #self.curr_omega_est = self.particle_pos[np.argmax(self.particle_wgts)]
             self.break_flag = True
             return
 
