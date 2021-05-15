@@ -1,9 +1,13 @@
 import numpy as np
 from smc_memory import smc_memory
+from sklearn.neighbors import KernelDensity
+from sklearn.model_selection import GridSearchCV
+from scipy.stats import gaussian_kde
+#from sklearn.model_selection import LeaveOneOut
 
 class phase_est_smc:
 
-    def __init__(self, omega_star, t0, max_iters, heuristic=None):
+    def __init__(self, omega_star, t0, max_iters, bandwidth=5e-3, heuristic=None):
         self.omega_star = omega_star
         self.t = t0
         self.break_flag = False
@@ -12,11 +16,14 @@ class phase_est_smc:
         self.max_iters = max_iters
         self.curr_omega_est = 0 # best current estimate of omega
         self.memory = smc_memory() # memory to track statistics of each run
+        self.rng = np.random.default_rng(10)
 
         if heuristic is None:
             self.heuristic = 'exponential'
         elif heuristic == 'adaptive':
             self.heuristic = 'adaptive'
+
+        self.bandwidth = bandwidth
 
     def init_particles(self, num_particles):
         """
@@ -26,7 +33,7 @@ class phase_est_smc:
             num_particles: number of particles in the SMC algorithm
         """
         self.num_particles = num_particles
-        self.particle_pos = np.linspace(-np.pi, np.pi, self.num_particles)
+        self.particle_pos = self.rng.uniform(-np.pi, np.pi, size=self.num_particles)
         self.particle_wgts = np.ones(num_particles) * 1/num_particles # uniform weight initialization
 
     def particles(self, num_measurements=1, threshold=None):
@@ -48,13 +55,13 @@ class phase_est_smc:
 
         while n_eff is None or n_eff >= threshold:
 
-            # phi_k = np.random.uniform() * 2 * np.pi
-            phi_k = np.random.uniform(low=-1, high=1) * np.pi
+            # phi_k = self.rng.uniform() * 2 * np.pi
+            phi_k = self.rng.uniform(low=-1, high=1) * np.pi
             # phi_k = 0
 
             measure_list = []
             for _ in range(num_measurements):
-                r = np.random.uniform()
+                r = self.rng.uniform()
                 if r <= prob_zero(self.omega_star, phi_k, self.t):
                     measure_list.append(0)
                 else:
@@ -77,7 +84,10 @@ class phase_est_smc:
 
             self.counter += 1
 
-            self.data.append(self.particle_pos[np.argmax(self.particle_wgts)])
+            # if (self.counter+1)%20 == 0:
+            #     print(self.counter)
+
+            self.data.append(np.average(self.particle_pos, weights = self.particle_wgts))
  
             if self.counter == self.max_iters:
                 # self.curr_omega_est = self.particle_pos[np.argmax(self.particle_wgts)]
@@ -97,7 +107,7 @@ class phase_est_smc:
         Draw samples from current posterior for binning so that we can
         pass into NN for resampling
         """
-        data = np.random.choice(self.particle_pos, size = num_samples, p=self.particle_wgts)
+        data = self.rng.choice(self.particle_pos, size = num_samples, p=self.particle_wgts)
 
         # if std deviation of posterior is 0, it means the distribution is sharply peaked
         # and will not change anymore. we can exit the algorithm
@@ -115,7 +125,31 @@ class phase_est_smc:
 
         return bins, edges
 
+    def kde_resample(self, num_samples=10000, kernel='gaussian', method=None):
 
+        if method == 1:
+            data = self.rng.choice(self.particle_pos, size=num_samples, p=self.particle_wgts)
+            data = data[:, np.newaxis]
+            #bandwidths = 10 ** np.linspace(-3, -2, 10)
+            # grid = GridSearchCV(KernelDensity(kernel='gaussian'),
+            #                     {'bandwidth': bandwidths})
+            # grid.fit(data)
+            # bandwidth = grid.best_params_['bandwidth']
+            # print(bandwidth)
+            
+            kernel = KernelDensity(bandwidth = self.bandwidth, kernel = kernel)
+            kernel.fit(data)
+            self.particle_pos = kernel.sample(n_samples=self.num_particles).squeeze()
+            self.particle_pos += self.rng.normal(scale=self.bandwidth, size=self.particle_pos.shape)
+            self.particle_wgts = np.ones(self.num_particles) * 1/self.num_particles
+
+        elif method == 2:
+            kernel = gaussian_kde(self.particle_pos, weights=self.particle_wgts)
+            self.particle_pos = kernel.resample(size=self.num_particles).squeeze()
+            self.particle_wgts = np.ones(self.num_particles) * 1/self.num_particles
+
+        self.memory.upd_kernel(kernel)
+        self.memory.upd_pos_wgt_aft_res(self.particle_pos, self.particle_wgts)
     def update_t(self):
         """
         Updates time 
@@ -124,17 +158,17 @@ class phase_est_smc:
         if self.heuristic == 'exponential':
             self.t = self.t * 9/8
         elif self.heuristic == 'adaptive':
-            two_particles = np.random.choice(self.particle_pos, size=2, replace=False, p=self.particle_wgts)
+            two_particles = self.rng.choice(self.particle_pos, size=2, replace=False, p=self.particle_wgts)
             self.t = 1 / np.abs(two_particles[0] - two_particles[1])
 
     def bootstrap_resample(self):
         """
         Simple bootstrap resampler
         """
-        self.particle_pos = np.random.choice(self.particle_pos, size = self.num_particles, p=self.particle_wgts)
+        self.particle_pos = self.rng.choice(self.particle_pos, size = self.num_particles, p=self.particle_wgts)
         self.particle_wgts = np.ones(self.num_particles) * 1/self.num_particles
         
-    def nn_bins_to_particles(self, bins, edges, method=3):
+    def nn_bins_to_particles(self, bins, edges):
         """
         Convert NN bins to particles.
 
@@ -147,50 +181,38 @@ class phase_est_smc:
         bins = bins[0]
         self.memory.upd_bins_edges_aft_res(bins, edges)
         particle_pos = edges
-        
-        if method==1:
-            # method 1: duplicate particle positions and weights
-            repeat_factor = self.num_particles/len(bins)
-            self.particle_pos = np.repeat(particle_pos, repeat_factor)
-            if len(self.particle_pos) != self.num_particles:
-                print("Number of particles not multiple of number of bins!")
-                return
-            self.particle_wgts = np.repeat(bins, repeat_factor)
-            self.particle_wgts = self.particle_wgts/np.sum(self.particle_wgts)
 
-        if method==2:
-            ## method 2: sample from binned distribution
-            ## but take every particle position to be middle of bin
-            self.particle_pos = np.random.choice(particle_pos, size=self.num_particles, p=bins)
-            self.particle_wgts = np.ones(self.num_particles) * 1/self.num_particles
+        ## method 2: sample from binned distribution
+        ## but take every particle position to be middle of bin
+        # self.particle_pos = self.rng.choice(particle_pos, size=self.num_particles, p=bins)
+        # self.particle_wgts = np.ones(self.num_particles) * 1/self.num_particles
 
-        if method==3:
-            ## every bin defines a gaussian with mean the bin center, and std 1/2 bin width
-            ## we sample as many particles in each bin when converting from bins to particles
+        ## every bin defines a gaussian with mean the bin center, and std 1/2 bin width
+        ## we sample as many particles in each bin when converting from bins to particles
 
-            # first convert bins from probabilities to number of particles
-            # then check if there is a discrepancy with total number of particles SMC is supposed to have
-            # if there is then correct for it            
-            bins = bins * self.num_particles
-            bins = np.rint(bins).astype(int)
-            bins_sum = bins.sum()
+        # first convert bins from probabilities to number of particles
+        # then check if there is a discrepancy with total number of particles SMC is supposed to have
+        # if there is then correct for it            
+        bins = bins * self.num_particles
+        bins = np.rint(bins).astype(int)
+        bins_sum = bins.sum()
 
-            if bins_sum != self.num_particles:
-                n = abs(self.num_particles - bins_sum) ## difference in number of particles
-                choices = np.random.choice(np.arange(len(bins)), size=n, p=bins/bins_sum)
-                for i in choices:
-                    if bins_sum < self.num_particles:
-                        bins[i] += 1
-                    else:
-                        bins[i] -= 1
-    
-            particle_pos = []
-            edge_width = edges[1] - edges[0]
-            std = edge_width/4
-            for i in range(len(edges)):
-                n_part_from_bin = bins[i]
-                pos_from_bin = np.random.normal(edges[i], std, size=n_part_from_bin).tolist()
-                particle_pos.extend(pos_from_bin)
+        if bins_sum != self.num_particles:
+            n = abs(self.num_particles - bins_sum) ## difference in number of particles
+            choices = self.rng.choice(np.arange(len(bins)), size=n, p=bins/bins_sum)
+            for i in choices:
+                if bins_sum < self.num_particles:
+                    bins[i] += 1
+                else:
+                    bins[i] -= 1
+
+        particle_pos = []
+        edge_width = edges[1] - edges[0]
+        std = edge_width/4
+        for i in range(len(edges)):
+            n_part_from_bin = bins[i]
+            pos_from_bin = self.rng.normal(edges[i], std, size=n_part_from_bin).tolist()
+            particle_pos.extend(pos_from_bin)
 
         self.particle_pos = np.array(particle_pos).copy()
 
@@ -214,10 +236,10 @@ class phase_est_smc:
             self.break_flag = True
             return
 
-        new_particle_pos = np.random.choice(self.particle_pos, size=self.num_particles, p=self.particle_wgts)
+        new_particle_pos = self.rng.choice(self.particle_pos, size=self.num_particles, p=self.particle_wgts)
         for i in range(len(new_particle_pos)):
             mu_i = a * new_particle_pos[i] + (1-a) * mu
-            new_particle_pos[i] = np.random.normal(loc=mu_i, scale=np.sqrt(var))  ## scale is standard deviation
+            new_particle_pos[i] = self.rng.normal(loc=mu_i, scale=np.sqrt(var))  ## scale is standard deviation
 
         self.particle_pos = np.copy(new_particle_pos)
         self.particle_wgts = np.ones(self.num_particles) * 1/self.num_particles ## set all weights to 1/N again

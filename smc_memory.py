@@ -14,6 +14,8 @@ class smc_memory:
         # particle positions and weights after resampling
         self.pos_wgt_aft_res = []
 
+        self.kernel = []
+
     def upd_pos_wgt_bef_res(self, pos, wgt):
         self.pos_wgt_bef_res.append((pos, wgt))
 
@@ -26,4 +28,5 @@ class smc_memory:
     def upd_pos_wgt_aft_res(self, pos, wgt):
         self.pos_wgt_aft_res.append((pos, wgt))
 
-
+    def upd_kernel(self, kernel):
+        self.kernel.append(kernel)
